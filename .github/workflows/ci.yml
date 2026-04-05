@@ -2,9 +2,9 @@ name: CI — Full Regression
 
 on:
   push:
-    branches: [master]
+    branches: [main]
   pull_request:
-    branches: [master]
+    branches: [main]
 
 env:
   SA_PASSWORD: CiTestPwd99strong
