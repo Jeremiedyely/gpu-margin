@@ -1060,10 +1060,10 @@
 | Phase 0 — Infrastructure | `[x]` Complete | `[x]` Authorized |
 | Phase 1 — Database Schema | `[x]` Complete | `[x]` Authorized |
 | Phase 2 — Ingestion Module | `[x]` Complete — 19/19 components, 186 assertions | `[x]` Authorized |
-| Phase 3 — Allocation Engine | `[x]` Complete — 11/11 components, 98 assertions | `[ ]` Authorized |
-| Phase 4 — Reconciliation Engine | `[x]` Complete — 8/8 components, 75 assertions | `[ ]` Authorized |
-| Phase 5 — State Machine | `[x]` Complete — 12/12 components, 121 tests, 133 assertions | `[ ]` Authorized |
-| P1 #32 — Integration Test Gate | `[x]` Passing — 1 test, 28 assertions | `[ ]` Authorized |
+| Phase 3 — Allocation Engine | `[x]` Complete — 11/11 components, 98 assertions | `[x]` Authorized — 2026-04-03 |
+| Phase 4 — Reconciliation Engine | `[x]` Complete — 8/8 components, 75 assertions | `[x]` Authorized — 2026-04-04 |
+| Phase 5 — State Machine | `[x]` Complete — 12/12 components, 121 tests, 133 assertions | `[x]` Authorized — 2026-04-04 |
+| P1 #32 — Integration Test Gate | `[x]` Passing — 1 test, 28 assertions | `[x]` Authorized — 2026-04-04 |
 | Phase 6 — UI Screen | `[x]` Complete — 14/14 components, 63 frontend tests + 48 backend tests = 111 tests, 168+ assertions | `[x]` Authorized |
 | Phase 7 — Export Module | `[x]` Complete — 9/9 components, 58 tests, 85+ assertions | `[x]` Authorized |
 | E2E Smoke Test | `[x]` Passing — 1 test, 12 steps, ~40 assertions · full pipeline CSV→Export proven | `[x]` Confirmed |

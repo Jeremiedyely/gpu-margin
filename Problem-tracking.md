@@ -675,9 +675,108 @@ DEFECT-009
                Flyway now depends_on db_init: service_completed_successfully.
                Startup chain: db (healthy) → db_init (creates database) → flyway
                (runs migrations) → web + celery_worker (start).
-  Files:       docker-compose.yml, db/init/create_database.sql, db/init/init_db.sh
-  Verified:    Pending — user needs to run docker-compose down -v && up --build
+  Files:       docker-compose.yml, db/init/create_database.sql, db/init/init_db.sh,
+               migrations/V1__enable_snapshot_isolation.sql
+  Verified:    Confirmed via commit ba2023d (2026-04-05). Full clean rebuild succeeds.
+               Phases 1–7 complete on stack with db_init in startup chain.
   Severity:    🔴 CRITICAL (BLOCKING — all downstream services depend on tables)
+
+DEFECT-010
+  Symptom:     Customer Data Aggregator wrote identity_broken_tenants twice when
+               two analysis runs fired for the same session_id (page refresh
+               between ANALYZED transition and SET cache read).
+  Layer:       2 — Domain Engines (UI aggregator)
+  Root Cause:  RC-7 — Silent Error Swallowing (no idempotency guard)
+  Archetype:   3 — The First-Time Failure (under page reload edge case)
+  Mechanism:   SET pre-build at ANALYZED did not check whether
+               identity_broken_tenants already had rows for session_id before
+               writing. A duplicate run produced a UQ violation at DB layer
+               (TR_identity_broken_tenants_prevent_mutation THROW 51002) —
+               surfaced as analysis FAIL with no clear root cause for analyst.
+  Fix:         Added idempotency guard to customer_data_aggregator: read
+               existing rows for session_id first; if any exist, skip the
+               write and treat existing SET as canonical (P3 #28 pattern
+               applied at the aggregator layer).
+  Files:       app/ui/customer_data_aggregator.py
+  Verified:    Confirmed via commit ba2023d (2026-04-05). E2E smoke test
+               passes with simulated double-run.
+  Severity:    🟡 WARNING (functional but surfaced as a noisy analysis FAIL)
+
+DEFECT-011
+  Symptom:     APPROVED state reached server-side but UI export buttons did
+               not become visible. CFO completed approval, saw success
+               message, but could not download files.
+  Layer:       6 — User Interface (state routing)
+  Root Cause:  RC-5 — Implicit State Machine Gap (APPROVED routing not handled)
+  Archetype:   3 — The First-Time Failure (first time reaching APPROVED in UI)
+  Mechanism:   View2FooterControlManager derived approve_control state from
+               application_state read from /api/state. Server-side state was
+               correct (APPROVED + write_result=SUCCESS), but the derivation
+               for export_buttons_visible had no APPROVED branch — fell through
+               to LOCKED. CFO saw an approved session with locked exports.
+  Fix:         Added APPROVED case to derive_export_button_state.
+               state_routes.py response schema now includes explicit
+               export_visibility flag derived server-side from
+               (application_state, write_result). Server is source of truth;
+               UI renders it directly.
+  Files:       app/api/state_routes.py,
+               app/state_machine/transition_request_receiver.py,
+               frontend/src/components/View2FooterControlManager.tsx
+  Verified:    Confirmed via commit ba2023d (2026-04-05). Phase 6 hard gate
+               "Approve DEACTIVATED + Export ACTIVE after APPROVED" now passes.
+  Severity:    🔴 CRITICAL (CFO could not complete the export pipeline)
+
+DEFECT-012
+  Symptom:     Export buttons clickable but produced no file. Browser dev
+               tools showed 404 on POST /api/export.
+  Layer:       5 — API Gateway (missing endpoint)
+  Root Cause:  RC-3 — Missing Pipeline Step (export API endpoint not wired)
+  Archetype:   5 — The Name Game (frontend called endpoint that did not exist)
+  Mechanism:   Export Module (Phase 7) was specified and components
+               implemented, but the FastAPI route at POST /api/export was
+               never registered in main.py. Frontend export handler fired
+               but hit a 404. Export Source Reader, Format Router, Generators,
+               Output Verifier, and File Delivery Handler all existed and
+               tested green in isolation — missing link was the HTTP entry point.
+  Fix:         Created app/api/export_routes.py with POST /api/export.
+               Wires format query parameter to Format Router. Returns
+               computer:// link on success. Registered in main.py. Frontend
+               handler in View2FooterControlManager updated to consume the
+               response and trigger browser download.
+  Files:       app/api/export_routes.py, app/main.py, app/tasks.py,
+               frontend/src/components/View2FooterControlManager.tsx
+  Verified:    Confirmed via commit ba2023d (2026-04-05). All 3 export
+               formats (CSV, Excel, Power BI) downloadable via UI.
+  Severity:    🔴 CRITICAL (export pipeline non-functional end to end)
+
+DEFECT-013
+  Symptom:     After APPROVED + export, CFO had no way to start a new
+               analysis in the same browser session. Approve was DEACTIVATED
+               (correct) but no New Session control existed. Page refresh
+               kept the same TERMINAL session_id in view.
+  Layer:       6 — User Interface + 4 — State Machine (session lifecycle gap)
+  Root Cause:  RC-5 — Implicit State Machine Gap (no path to new session)
+  Archetype:   3 — The First-Time Failure (first session reached TERMINAL)
+  Mechanism:   The State Machine's APPROVED → TERMINAL transition closes the
+               current session permanently. Design did not include a UI
+               control to begin a NEW session — the assumption was the next
+               session would start with a fresh page load. But session_id is
+               persisted server-side; UI showed the TERMINAL session on
+               reload. CFO was stuck.
+  Fix:         Added /api/session/close endpoint that explicitly closes the
+               current session view and prepares a new session_id slot. Added
+               New Session control to View2FooterControlManager that fires
+               after APPROVED + Export. UI clears session_id and routes back
+               to View 1 Import Screen. Session close is deferred until CFO
+               explicitly chooses to start over — approved session remains
+               queryable for audit while a new session can begin.
+  Files:       app/api/state_routes.py,
+               app/state_machine/transition_request_receiver.py,
+               frontend/src/components/View2FooterControlManager.tsx,
+               frontend/src/components/ScreenRouter.tsx
+  Verified:    Confirmed via commit ba2023d (2026-04-05). E2E smoke test
+               includes new-session flow.
+  Severity:    🟡 WARNING (functional but workflow incomplete without it)
 ```
 
 ---

@@ -8,6 +8,7 @@ session-context: load first — establishes the problem, market validation, CFO 
 
 **Created:** 2026-03-25 13:12 CDT
 
+> See: 00-index.md — full documentation manifest · entry point for discovery
 > See: requirements.md — WHAT layer · grain definition · computation contract · state machine · UI outputs
 
 ---

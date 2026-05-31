@@ -754,6 +754,286 @@ Step 7: Confirm Zone 2R Risk flag = FLAG for that customer in UI render
 
 ---
 
+## Phase 8 — Deployment (Azure)
+
+**Why this is last:** All Phases 0–7 produce a structurally complete, locally-tested application. Going live is not a continuation of the build — it is a separate engineering discipline focused on infrastructure provisioning, secrets management, identity, observability, and operational readiness. Doing it before the application is structurally complete wastes work on a moving target. Doing it after is the correct order.
+
+**Cloud target:** Microsoft Azure. Rationale: SQL Server 2022 → Azure SQL Database is the lowest-friction managed migration (T-SQL compatibility preserved · snapshot isolation native · same Flyway migrations). Azure Container Apps runs Docker images natively without Kubernetes overhead. Microsoft Entra ID is purpose-built for the CFO/finance user persona.
+
+**Mode change:** Prior phases ran locally with `docker compose up`. Phase 8 provisions cloud resources that incur cost. Every step has a teardown command at the bottom — use it if any verification fails so cost does not accumulate during diagnosis.
+
+---
+
+### Step 8.1 — Resource group + budget alert
+
+**What:** Create resource group `rg-gpu-margin-prod` in East US 2 (or closest region). Set monthly budget at $400 with email alert at 80%.
+
+**Tools:**
+- `Azure CLI` (`az`) — login + provisioning
+- Azure Portal — budget alert configuration
+
+**Why this tool:** All subsequent steps script against `az`. Provisioning via portal alone is not reproducible across staging and production.
+
+**Verify 8.1** `[ ]` `az group show -n rg-gpu-margin-prod` returns the group · budget alert email confirmed
+
+---
+
+### Step 8.2 — Azure Key Vault + migrate the 11 parameters
+
+**What:** Create `kv-gpu-margin-prod`. For each of the 11 configurable parameters (from `references/stabilization-register.md`), set a secret in the vault. Add the production SA_PASSWORD as a 12th secret. Update `app/config.py` to read from Key Vault via `azure-keyvault-secrets` SDK when `ENV=production`.
+
+**Parameters to migrate:**
+INGESTION_BATCH_THRESHOLD · AE_TIMEOUT · DISPATCH_ACK_TIMEOUT · DISPATCH_MAX_RETRIES · CLOSER_RETRY_INTERVAL · CLOSER_MAX_RETRIES · ANALYSIS_MAX_RETRIES · MAX_EXPORT_RERUNS · XLSX_GENERATION_TIMEOUT · MAX_HISTORY_SESSIONS · HISTORY_RETENTION_DAYS
+
+**Tools:**
+- `Azure Key Vault` — managed secrets store
+- `Azure CLI` — `az keyvault secret set`
+- `azure-keyvault-secrets` Python SDK — application-side read
+
+**Why this tool:** `.env` files cannot be committed and cannot be rotated. Key Vault provides versioned secrets with RBAC and audit logs. The application reads at boot; rotation requires container restart, not redeploy.
+
+**Verify 8.2** `[ ]` `az keyvault secret list --vault-name kv-gpu-margin-prod` returns 12 secrets · staging boot reads all 12 via SDK
+
+---
+
+### Step 8.3 — Azure SQL Database + apply Flyway migrations
+
+**What:** Create `sql-gpu-margin-prod` server. Create `gpu_margin` database (General Purpose 2 vCore tier sufficient at low volume). Configure firewall to allow Container Apps subnet only. Run V1–V16 Flyway migrations against it.
+
+**Tools:**
+- `Azure SQL Database` — managed SQL Server (T-SQL compatible · snapshot isolation native)
+- `Flyway` — same migrations as Phase 1 · no application code changes
+- `Azure CLI` — `az sql server create` + `az sql db create`
+- `SSMS` — connect over a temporary public endpoint to verify schema
+
+**Why this tool:** Azure SQL Database is T-SQL compatible with SQL Server 2022 (already verified in Phase 1). Snapshot isolation (P1 #17) is available natively. Composite index on raw.iam (P1 #8) is the same DDL. No application code changes required to migrate.
+
+**Verify 8.3** `[ ]` `az sql db show` returns the database · Flyway log shows V1–V16 applied · SSMS confirms 13 tables present
+
+---
+
+### Step 8.4 — Azure Cache for Redis
+
+**What:** Create `redis-gpu-margin-prod` (Basic tier C0 at low volume; Standard for zone redundancy at higher volume). Enable AOF persistence. Capture the connection string into Key Vault as `REDIS_CONNECTION_STRING`.
+
+**Tools:**
+- `Azure Cache for Redis` — managed Redis with AOF (per `tools-stack.md` Layer 5 requirement)
+- `Azure CLI` — `az redis create`
+- `Azure Key Vault` — connection string storage
+
+**Why this tool:** Celery broker + ACK contract enforcement require a Redis instance reachable by all worker containers. AOF persistence ensures Celery Beat scheduled retries (CLOSER_RETRY_INTERVAL) survive cache restarts — without AOF, a Redis restart drops the scheduled APPROVED Session Closer retry queue and sessions could remain non-TERMINAL indefinitely.
+
+**Verify 8.4** `[ ]` `az redis show` returns Running · `redis-cli -h <host> -p 6380 --tls ping` returns PONG
+
+---
+
+### Step 8.5 — Azure Container Registry + push image
+
+**What:** Create `acrgpumarginprod` (Basic tier sufficient at single region; Premium for geo-replication). Push the `gpu_margin_app` image. Tag with git SHA for traceability.
+
+**Tools:**
+- `Azure Container Registry` (ACR) — image registry
+- `Docker` — same `Dockerfile` from `phase_zero/`
+- `GitHub Actions` deploy job — automates build + push (Step 8.10)
+
+**Why this tool:** ACR is the natural registry for Container Apps. Image tags by git SHA prevent `latest`-tag drift between deployments. A revert to a prior SHA is one `az containerapp update` command away.
+
+**Verify 8.5** `[ ]` `az acr repository show-tags -n acrgpumarginprod --repository gpu_margin_app` shows the pushed SHA tag
+
+---
+
+### Step 8.6 — Azure Container Apps environment + deploy services
+
+**What:** Create Container Apps environment `cae-gpu-margin-prod` in a VNet. Deploy 3 container apps:
+- `web` (FastAPI + uvicorn) · 1 replica min · 5 max · scale on HTTP request count
+- `celery_worker` (Allocation + Reconciliation engines) · 2 replica min · 10 max · scale on Redis queue length
+- `celery_beat` (scheduled tasks) · **1 replica fixed (not autoscaled)** — Beat must be singleton
+
+Wire each app to read secrets from Key Vault, connect to Azure SQL DB via Managed Identity, connect to Azure Cache for Redis via private endpoint.
+
+**Tools:**
+- `Azure Container Apps` (ACA) — serverless container runtime
+- `Managed Identity` — passwordless DB connection (no SA_PASSWORD in env at runtime)
+- `Azure CLI` — `az containerapp create` per service
+- `Azure Monitor` — autoscale metric source
+
+**Why this tool:** Container Apps runs Docker images without Kubernetes overhead. Managed Identity replaces the SA_PASSWORD path with Entra ID authentication to SQL DB — the password in Key Vault becomes the fallback, not the primary. **Celery Beat as a singleton fixed replica is critical:** multiple Beat instances would fire the APPROVED Session Closer retry multiple times per session, producing duplicate TERMINAL writes (Phase 5 specifically guards against this via P3 #28 idempotency, but a singleton Beat avoids the issue at infrastructure level).
+
+**Verify 8.6** `[ ]` `az containerapp list` shows 3 apps Running · `curl https://web-gpu-margin-prod.azurecontainerapps.io/health` returns the health JSON · backend logs show DB connection via Managed Identity
+
+---
+
+### Step 8.7 — Microsoft Entra ID + JWT validation
+
+**What:** Register `gpu-margin-app` in Entra ID. Create app role `CFO`. Issue Entra ID tokens to authorized CFO users. Add `azure-identity` + `python-jose` to FastAPI dependency chain. Every endpoint except `/health` requires a valid JWT with `CFO` role.
+
+**Tools:**
+- `Microsoft Entra ID` (formerly Azure AD) — enterprise identity provider
+- `python-jose` — JWT validation in FastAPI
+- `azure-identity` — token acquisition for service-to-service calls
+- FastAPI dependency injection — `Depends(verify_cfo_token)` on every route except `/health`
+
+**Why this tool:** The application stores GPU billing data — financial-grade. Open API endpoints are not acceptable for go-live. Entra ID is the natural choice for the CFO persona (most finance users are already in their company's Entra tenant). Role-based access (`CFO` role) prevents unauthorized users from triggering Analyze or Approve. JWT validation is stateless — no auth-session DB lookups in the hot path.
+
+**Verify 8.7** `[ ]` Unauthenticated `/api/upload` returns 401 · valid CFO token returns 200 · valid token missing CFO role returns 403
+
+---
+
+### Step 8.8 — Domain + TLS
+
+**What:** Acquire domain (e.g., `gpu-margin.example.com`). Add Container Apps custom domain. Issue managed TLS certificate. Update Entra ID app registration redirect URI to the custom domain.
+
+**Tools:**
+- `Azure DNS` (or Cloudflare in front) — DNS authority
+- Container Apps managed certificates — free TLS via Let's Encrypt · auto-renews
+- `nslookup` / `dig` — DNS propagation tools
+
+**Why this tool:** TLS is non-negotiable for an authenticated application handling financial data. Managed certificates auto-renew — no operator action required at certificate expiry. Cloudflare in front adds DDoS protection at minimal cost.
+
+**Verify 8.8** `[ ]` `curl https://gpu-margin.example.com/health` returns 200 with valid TLS · SSL Labs scan returns A or A+
+
+---
+
+### Step 8.9 — Application Insights + alert rules
+
+**What:** Provision Application Insights workspace. Add instrumentation to FastAPI and Celery via `opencensus-ext-azure` auto-instrumentation. Configure 4 alert rules.
+
+**Alert rules:**
+- AE_TIMEOUT breach → P1 alert
+- CLOSER_MAX_RETRIES exhausted → CRITICAL alert (per `tools-stack.md`)
+- Export Gate BLOCKED_WRITE_NULL → CRITICAL (signals P1 #26 crash window detected)
+- MAX_EXPORT_RERUNS exhausted → P2 alert
+
+**Tools:**
+- `Application Insights` — Azure-native APM
+- `opencensus-ext-azure` — Python SDK for automatic trace + metric collection
+- `Azure Monitor` — alert rule engine + action groups
+- Email + SMS action groups for CRITICAL alerts
+
+**Why this tool:** `tools-stack.md` Layer 5 specifies Prometheus + AlertManager as observability — Application Insights is the Azure-native equivalent and integrates with Container Apps without sidecars. The 4 alert rules match what was documented as "required alert channels."
+
+**Verify 8.9** `[ ]` Live Metrics shows traces from production traffic within 60 seconds · forced AE_TIMEOUT scenario in staging fires the P1 alert
+
+---
+
+### Step 8.10 — GitHub Actions deploy job
+
+**What:** Extend the existing CI workflow (per commit `8522615`) with a `deploy` job that runs on push to `main` after CI gates pass:
+1. Build image from current SHA
+2. Push to ACR with tag `<sha>` and `latest`
+3. Update Container Apps revision via `az containerapp update`
+4. Run E2E smoke test against the new revision URL
+5. If smoke test passes → promote to production · if fails → automatic rollback to prior revision
+
+**Tools:**
+- `GitHub Actions` — existing workflow
+- `azure/docker-login` action — ACR authentication
+- `azure/login` action — Azure CLI authentication via federated credentials (OIDC)
+- `azure/container-apps-deploy-action` — revision management
+
+**Why this tool:** Manual deployment is error-prone. The CI workflow already runs the full regression suite — extending it with a deploy job means every successful CI run produces a deployable artifact. Automatic rollback on smoke test failure prevents a bad deploy from reaching CFO users. OIDC federated credentials remove the need to store Azure secrets in GitHub.
+
+**Verify 8.10** `[ ]` Trivial commit to main → CI passes → deploy job runs → smoke test passes → new revision active · revision history shows the new revision
+
+---
+
+### Step 8.11 — SQL backup + retention policy
+
+**What:** Enable Point-in-Time Restore (PITR) on Azure SQL Database — 7 days minimum, 35 days recommended. Enable Long-Term Retention (LTR) for monthly backups held for 7 years. Confirm `final.allocation_result` is included in LTR (it is — LTR is full-database).
+
+**Tools:**
+- Azure SQL Database PITR — automatic, no action required beyond enabling
+- Azure SQL Database LTR policy — `az sql db ltr-policy set`
+- Compliance evidence: backup retention proves the immutability invariant of `final.allocation_result` survives infrastructure loss
+
+**Why this tool:** Immutability inside the application (THROW 51000 prevents UPDATE/DELETE) does not protect against infrastructure loss. LTR with 7-year retention matches typical financial audit requirements (SOX retention is 7 years).
+
+**Verify 8.11** `[ ]` `az sql db ltr-policy show` returns the configured policy · restore an LTR backup to a staging database and verify schema + approved rows recover correctly
+
+---
+
+### Step 8.12 — Security review + penetration test
+
+**What:** Engage a third-party security firm for a focused penetration test BEFORE any external user is granted access. Scope: authentication bypass · SQL injection via the 5 ingestion CSVs · JWT replay · Container Apps escape · SQL DB privilege escalation. Remediate every High and Critical finding. Document acceptances for Medium findings.
+
+**Tools:**
+- Third-party penetration test firm
+- `Microsoft Defender for Cloud` — continuous posture assessment
+- `bandit` (Python) + `npm audit` (frontend) — automated code-level scans in CI
+
+**Why this tool:** The application handles CFO-grade financial data. Self-attestation is not sufficient. A penetration test is the structural control that distinguishes "we think it's secure" from "an adversary actively tried and could not break it." Defender for Cloud catches drift between tests.
+
+**Verify 8.12** `[ ]` Pentest report received · zero High/Critical open · all Medium findings have a documented acceptance signed by Jeremie · Defender Secure Score ≥ 80%
+
+---
+
+### Step 8.13 — Production runbook
+
+**What:** Create `operations/production-runbook.md` (new Tier 6 BUILD artifact · per `00-index.md` STEP 7b). Cover:
+- Deployment procedure (manual override of automatic deploy)
+- Rollback procedure (revert Container Apps revision)
+- Incident response for each of the 4 Application Insights alerts
+- Disaster recovery procedure (LTR restore + Container Apps redeploy)
+- On-call rotation handoff
+- Cost monitoring procedure
+- CFO user onboarding (Entra ID role assignment)
+
+**Tools:**
+- Markdown editor
+- `00-index.md` → STEP 7b update required after this file is created
+- `software-system-design.md` → add `> See:` block per STEP 7b
+
+**Why this tool:** A runbook is the difference between an outage that lasts 15 minutes and one that lasts 8 hours. Operational knowledge cannot live in one person's head if the application is going to serve real users.
+
+**Verify 8.13** `[ ]` Runbook reviewed and signed off by Jeremie · drill at least one documented procedure (manual rollback) and confirm correct outcome
+
+---
+
+### Phase 8 — Hard Gates
+
+| # | Gate | Verify |
+|---|------|--------|
+| 8.1 | Resource group + budget alert active | `az group show` + budget email received |
+| 8.2 | All 12 secrets in Key Vault | `az keyvault secret list` returns 12 |
+| 8.3 | SQL DB has 13 tables + V1–V16 applied | Flyway log + SSMS query |
+| 8.4 | Redis responding to PING | `redis-cli ping` returns PONG |
+| 8.5 | Image in ACR tagged by git SHA | `az acr repository show-tags` |
+| 8.6 | 3 Container Apps Running + healthy | `/health` returns 200 over HTTPS |
+| 8.7 | Auth enforced on every protected route | 401 without token · 200 with CFO role · 403 without role |
+| 8.8 | Custom domain + valid TLS | SSL Labs A or A+ |
+| 8.9 | Application Insights showing traffic | Live Metrics + AE_TIMEOUT alert test fired |
+| 8.10 | GitHub Actions deploys automatically | Trivial commit → new revision active |
+| 8.11 | PITR + LTR enabled | `az sql db ltr-policy show` |
+| 8.12 | Penetration test passed | Report on file · 0 High/Critical open |
+| 8.13 | Production runbook complete + drilled | Reviewed + manual-rollback drill passes |
+
+> **⛔ JEREMIE AUTHORIZATION REQUIRED** — All 13 gates pass before the first CFO user is granted access.
+
+`[ ]` **Jeremie authorizes production go-live**
+
+---
+
+### Phase 8 — Effort + cost estimate
+
+**Effort (single experienced engineer):** 2–4 weeks for the 13 steps. Steps 8.6 (Container Apps + Managed Identity) and 8.7 (Entra ID + JWT) are the longest individual steps at 3–5 days each.
+
+**Cloud cost at low volume (per month):**
+- Azure SQL Database General Purpose 2 vCore: ~$300
+- Azure Cache for Redis Basic C0: ~$15
+- Azure Container Apps (Consumption, low traffic): ~$30
+- Azure Container Registry Basic: ~$5
+- Azure Key Vault Standard: ~$1
+- Application Insights (first 5 GB free): $0–50
+- Azure DNS: ~$1
+- **Total: $350–400/month at low volume.** Scales with concurrent CFO users and analysis frequency.
+
+**Teardown procedure (if any verification fails):**
+```
+az group delete -n rg-gpu-margin-prod --yes --no-wait
+```
+This removes every resource provisioned in Steps 8.1–8.11 in a single command. Run this immediately if cost is accumulating during diagnosis.
+
+
 ## CI/CD — GitHub Actions Gates
 
 These gates must be active before any phase is deployed beyond the local environment:
@@ -785,6 +1065,12 @@ PHASE 5   State Machine         Verify: crash simulation → GATE_BLOCKED_WRITE_
           ↓
 PHASE 6   UI Screen             Verify: Risk flag · red margin · Approve gate
 PHASE 7   Export Module         Verify: 3 formats · column order · gate blocks non-APPROVED
+          ↓
+          System is complete locally (Phases 1–7 complete · 2026-04-05)
+          ↓
+PHASE 8   Deployment (Azure)    Verify: 13 hard gates · pentest passes · runbook drilled
+          Target: Azure SQL DB + Container Apps + Entra ID + Key Vault + App Insights
+          Estimated: 2–4 weeks · $350–400/month at low volume
 ```
 
 **Each phase has one clear output. Each output has a defined test. No phase advances without Jeremie's direction. The grain is the anchor at every step.**

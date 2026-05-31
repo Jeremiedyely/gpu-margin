@@ -6,8 +6,42 @@ session-context: load after business.md and requirements.md — governs componen
 
 # Software System Design — GPU Gross Margin Visibility Application
 
+> See: 00-index.md — full documentation manifest · 24 files across 8 tiers
 > See: business.md — WHY layer · problem definition · CFO impact · application purpose
 > See: requirements.md — WHAT layer · grain · computation contract · state machine · UI outputs
+
+### Module Designs (Tier 4 — 6 modules · 73 components)
+> See: ingestion-module-design.md — Ingestion · 19 components
+> See: allocation-engine-design.md — Allocation Engine · 11 components
+> See: reconciliation-engine-design.md — Reconciliation Engine · 8 components
+> See: state-machine-design.md — State Machine · 12 components
+> See: ui-screen-design.md — UI Screen · 14 components
+> See: export-module-design.md — Export · 9 components
+
+### Data + API Architecture (Tier 5)
+> See: architecture-diagram.md — Mermaid flowchart · 9 subsystems
+> See: database-architect.md — grain-first design sequence · behavioral laws
+> See: db-schema-design.md — 13 tables · 28 indexes · 51 CHECK constraints · 4 triggers
+> See: solution-data-architecture-database.md — schema diagnostic agent · 8 schema laws
+> See: software-architect-api.md — API contract design partner · 4 contract types
+> See: solution-software-architect-api.md — solution-layer API architect · 7 phases
+> See: full-surface-api.md — 14 interfaces fully specified · 5 ADRs · K1–K5 contracts
+
+### Public Entry (Tier 0)
+> See: README.md — public-facing project README · architecture overview · run instructions
+
+### Build Governance (Tier 6)
+> See: implementation-analysis.md — 8-phase priority order · tool stack
+> See: build-plan.md — end-to-end build plan · CI gates
+> See: build-protocol.md — step-by-step execution protocol
+> See: build-checklist.md — active build tracker · phases 0–5 complete · Phase 6 in progress
+
+### Agents + Diagnostics (Tier 7) + References (Tier 8)
+> See: gpu-margin-engineer.prompt.md — senior full-stack engineer activation
+> See: cowork.prompt.md — MD diagnostic agent · 8 Cowork laws
+> See: Problem-tracking.md — diagnostic + debugging framework · 10 root causes · 9 defects
+> See: references/stabilization-register.md — 62 findings · 0 open
+> See: references/tools-stack.md — 71 tool decisions · 11 parameters · 6 prerequisites
 
 ---
 
@@ -199,11 +233,13 @@ or an alternative that meaningfully changes the output quality.
 ──────────────────────────────────────────────────────────
 
 STEP 6 — WAIT FOR INSTRUCTION
-⚠ Execution order note: STEP 7 (Save) fires before STEP 6 (Wait).
-  STEP 7 is numbered higher but executes earlier. This is intentional — save is a prerequisite for wait.
-  Sequence: STEP 5 → STEP 7 → STEP 6. Do not reverse this order.
+⚠ Execution order note: STEP 7 (Save) and STEP 7b (parent + index update) fire before STEP 6 (Wait).
+  STEP 7 and STEP 7b are numbered higher but execute earlier. This is intentional — save
+  and graph closure are prerequisites for wait.
+  Sequence: STEP 5 → STEP 7 → STEP 7b → STEP 6. Do not reverse this order.
+  Anti-Drift Rule 11 enforces this — STEP 6 does not fire while the graph is open.
 
-After STEP 7 (save and link) is complete:
+After STEP 7 (save and link) AND STEP 7b (parent + index update) are complete:
 
   → Do not continue to the next component unprompted.
   → Do not expand scope.
@@ -262,6 +298,17 @@ Rule 10 — No scope preview after STEP 6
   "here is what we design next" content without explicit instruction →
   stop → remove the forward content → close with STEP 6 wait only
   The next move is mine to direct — not yours to anticipate
+
+Rule 11 — No session close with open graph
+  STEP 6 wait fires before STEP 7b (parent + index update) is complete →
+  stop → return to STEP 7b → update parent's `> See:` block AND 00-index.md
+  → confirm both writes succeeded → then STEP 6 may fire
+  Every artifact must be reachable from business.md by link at session close.
+  An orphan at close is a Section 14 Order violation — fix before waiting.
+  Detection: after STEP 7 save, before emitting wait message, verify
+    (a) parent file contains `> See: [new-filename]` line, AND
+    (b) 00-index.md contains a row for [new-filename] in its correct tier.
+  If either check fails → STEP 6 does not fire. Return to STEP 7b.
 ```
 
 ---
@@ -353,6 +400,15 @@ Every design output follows this structure:
 7. Save design output as [module-name]-design.md to workspace folder
    Link via computer:// for analyst access
    (Fires after every STEP 3 execution. Does not fire for delta-only continuations.)
+         ↓
+7b. Update parent + index — close the documentation graph
+    → Add `> See: [new-filename]` block to the file declared in this design's
+      reads-from: frontmatter (the immediate parent in the HOW-layer hub)
+    → Add one row to the appropriate tier table in 00-index.md
+    → If new tier required, create the tier section header in 00-index.md
+    Rationale: every save without a parent-update creates an orphan. The graph
+    must close at save time — not later. Anti-Drift Rule 11 gates STEP 6 wait
+    on this completion. No session closes with an open graph.
          ↓
 8. Wait for instruction
 ```

@@ -9,6 +9,7 @@ session-context: authoritative — load on every build session
 **Created:** 2026-03-25
 **Purpose:** Machine-readable specification. Claude reads this as authoritative context for all build sessions.
 
+> See: 00-index.md — full documentation manifest
 > See: business.md — WHY layer · CFO problem definition · market research · application purpose
 ---
 
