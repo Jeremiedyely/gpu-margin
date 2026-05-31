@@ -30,18 +30,19 @@ Last updated: 2026-05-28
 **Build:** Phases 1–7 complete (2026-04-05) · 13 defects verified · E2E smoke test passing
 **Phase 8:** Deployment (Azure) PLANNED · not started · plan in `build-plan.md` lines 757–1036
 **Deployment posture:** Local-only via Docker Compose at `phase_zero/`
-**Last action:** Platform restarted after 2-month gap on 2026-05-28 · backend up · frontend pending `npm run dev`
+**Last action:** Platform restarted after 2-month gap on 2026-05-28 · backend up · frontend up · **smoke test passed end-to-end (Upload → Analyze → Approve → Export)** · zero regression after gap.
 
-**Working tree uncommitted (pending push):**
-- R1 documentation graph fix (`00-index.md` created · `software-system-design.md` STEP 7b + Rule 11 + See blocks · `business.md` + `requirements.md` See blocks)
-- Correction 1 (`build-checklist.md` Master Summary `[ ]` → `[x]` for Phases 3/4/5/P1 #32 Authorized)
-- Correction 2 (`Problem-tracking.md` DEFECT-009 verified + DEFECT-010–013 appended)
-- Phase 8 — Deployment (Azure) in `build-plan.md`
-- This CLAUDE.md + memory/ tree
+**Working tree (durably committed + pushed 2026-05-28):**
+- Commit `babe93c` "docs: close graph + sync build status + Phase 8 plan" pushed to `origin/main`
+- R1 documentation graph fix · Corrections 1 + 2 · Phase 8 — Deployment (Azure) · CLAUDE.md + memory/
+- Legacy `master` branch deleted from origin · `main` is the canonical branch
 
-**Pending pause point resolution:**
-- Smoke test 10-step CSV → Export verification
-- `git add` + `git commit` + `git push origin main` for all R1 + Corrections + Phase 8 work
+**All pause points resolved (2026-05-28):**
+- ✅ Smoke test passed end-to-end · platform functional
+- ✅ R1 + Corrections + Phase 8 + memory committed + pushed
+- ✅ Branch consolidation complete
+
+**Next decision (open):** Phase 8 Step 8.1 — Azure resource group + budget alert · requires Azure subscription decision + ~$400/month budget commitment + 2–4 weeks of focused work. Recommended precursor: customer walkthrough to validate Phase 8 timing before cost commitment.
 
 ---
 
