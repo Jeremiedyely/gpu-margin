@@ -1,3 +1,5 @@
+![GPU Gross Margin Visibility Platform](unnamed.png)
+
 # GPU Gross Margin Visibility Platform
 
 A full-stack financial intelligence system that ingests raw GPU infrastructure data, computes gross margin at multiple grain levels, reconciles results against billing and ERP records, and produces a locked, auditable, exportable financial view.
