@@ -1,3 +1,5 @@
+![upload](upload.png)
+
 ![GPU Gross Margin Visibility Platform](unnamed.png)
 
 # GPU Gross Margin Visibility Platform
