@@ -29,9 +29,9 @@ describe("resolveView", () => {
     expect(resolveView("APPROVED")).toBe("VIEW_2");
   });
 
-  // SR-05: null → ERROR
-  it("SR-05 routes null to ERROR", () => {
-    expect(resolveView(null)).toBe("ERROR");
+  // SR-05: null → VIEW_1 (no session yet — DEFECT-004)
+  it("SR-05 routes null to VIEW_1", () => {
+    expect(resolveView(null)).toBe("VIEW_1");
   });
 
   // SR-06: unrecognized string → ERROR
