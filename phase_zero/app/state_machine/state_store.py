@@ -15,7 +15,6 @@ Spec: state-machine-design.md — Component 1 — State Store
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from typing import Literal
 from uuid import UUID
 
@@ -110,7 +109,7 @@ _INSERT_HISTORY_SQL = text("""
     INSERT INTO dbo.state_history
         (session_id, from_state, to_state, transition_trigger, transitioned_at)
     VALUES
-        (:sid, :from_state, :to_state, :trigger, :transitioned_at)
+        (:sid, :from_state, :to_state, :trigger, SYSUTCDATETIME())
 """)
 
 
@@ -175,8 +174,6 @@ def write_state(
         current = read_state(conn, request.session_id)
         from_state = current.application_state if current else "EMPTY"
 
-    now = datetime.now(timezone.utc)
-
     # Determine whether this is a state transition or a metadata-only update.
     # CHK_history_no_self_transition blocks from_state == to_state unless
     # trigger = SYSTEM_RECOVERY. Metadata-only updates (e.g. session_status
@@ -211,7 +208,6 @@ def write_state(
                         "from_state": from_state,
                         "to_state": request.new_state,
                         "trigger": request.trigger,
-                        "transitioned_at": now,
                     },
                 )
 

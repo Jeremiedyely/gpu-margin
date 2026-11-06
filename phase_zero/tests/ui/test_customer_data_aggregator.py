@@ -243,14 +243,25 @@ def test_empty_grain(db_connection: Connection, test_session_id: UUID):
     assert len(result.identity_broken_set) == 0                     # CDA-12c
 
 
-def test_duplicate_cache_write_fails(db_connection: Connection, test_session_id: UUID):
-    """CDA-13: Second aggregate_customers with identity_broken → FAIL (PK)."""
+def test_duplicate_aggregate_reuses_cache(db_connection: Connection, test_session_id: UUID):
+    """CDA-13: Second aggregate_customers reuses cached SET → SUCCESS, no duplicate rows (DEFECT-010)."""
     _insert_standard_grain(db_connection, test_session_id)
     first = aggregate_customers(db_connection, test_session_id)
     assert first.result == "SUCCESS"
 
     second = aggregate_customers(db_connection, test_session_id)
-    assert second.result == "FAIL"                                  # CDA-13
+    assert second.result == "SUCCESS"                               # CDA-13a
+    assert second.identity_broken_set == first.identity_broken_set  # CDA-13b
+
+    row = db_connection.execute(
+        text("""
+            SELECT COUNT(*) AS cnt
+            FROM dbo.identity_broken_tenants
+            WHERE session_id = :sid
+        """),
+        {"sid": str(test_session_id)},
+    ).fetchone()
+    assert row.cnt == len(first.identity_broken_set)                # CDA-13c
 
 
 def test_read_empty_set(db_connection: Connection, test_session_id: UUID):
