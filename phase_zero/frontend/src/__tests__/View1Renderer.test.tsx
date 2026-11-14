@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { View1Renderer, deriveAnalyzeControl } from "../components/View1Renderer";
 
@@ -86,5 +86,33 @@ describe("View1Renderer", () => {
     const btn = screen.getByTestId("analyze-button");
     expect(btn).toHaveTextContent("Analysis in progress...");
     expect(btn).toBeDisabled();
+  });
+});
+
+describe("View1Renderer — enterprise upload", () => {
+  // V1-11: EMPTY footer explains why upload is locked
+  it("V1-11 EMPTY footer says how many files are missing", () => {
+    renderWithClient(<View1Renderer applicationState="EMPTY" analysisStatus={null} sessionId={null} />);
+    expect(screen.getByTestId("footer-reason")).toHaveTextContent("Add 5 more files to continue.");
+    expect(screen.getByTestId("drop-zone")).toBeInTheDocument();
+  });
+
+  // V1-12: dropping a file with a missing column lists it in the issues table
+  it("V1-12 dropped file with missing column appears in issues table", async () => {
+    renderWithClient(<View1Renderer applicationState="EMPTY" analysisStatus={null} sessionId={null} />);
+    const bad = new File(["tenant_id,billing_period,rate\nt1,2026-03,4.0\n"], "iam.csv", { type: "text/csv" });
+    fireEvent.drop(screen.getByTestId("drop-zone"), { dataTransfer: { files: [bad] } });
+    const table = await screen.findByTestId("issues-table");
+    expect(table).toHaveTextContent("contracted_rate");
+    expect(table).toHaveTextContent("iam.csv");
+  });
+
+  // V1-13: dropping a valid file marks its slot ready
+  it("V1-13 dropped valid file shows Columns OK on its slot", async () => {
+    renderWithClient(<View1Renderer applicationState="EMPTY" analysisStatus={null} sessionId={null} />);
+    const good = new File(["tenant_id,billing_period,billable_amount\nt1,2026-03,100\n"], "billing.csv", { type: "text/csv" });
+    fireEvent.drop(screen.getByTestId("drop-zone"), { dataTransfer: { files: [good] } });
+    expect(await screen.findByTestId("slot-check-4")).toHaveTextContent("Columns OK");
+    expect(screen.getByTestId("footer-reason")).toHaveTextContent("Add 4 more files to continue.");
   });
 });
