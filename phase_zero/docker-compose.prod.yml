@@ -1,0 +1,36 @@
+# Server-only overrides:
+# docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+services:
+  db:
+    environment:
+      MSSQL_PID: "Express"
+    ports: !reset []
+
+  redis:
+    ports: !reset []
+
+  web:
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    ports: !reset []
+    volumes: !reset []
+
+  celery_worker:
+    volumes: !reset []
+
+  caddy:
+    image: caddy:2
+    container_name: gpu_margin_caddy
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - web
+    restart: unless-stopped
+
+volumes:
+  caddy_data:
+  caddy_config:
